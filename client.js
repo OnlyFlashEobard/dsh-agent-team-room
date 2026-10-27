@@ -95,6 +95,12 @@ window.__ModuleLoader__.load({
       running: function () {
         return T('协作中', 'In progress')
       },
+      pausing: function () {
+        return T('暂停中', 'Pausing')
+      },
+      paused: function () {
+        return T('已暂停', 'Paused')
+      },
       done: function () {
         return T('已完成', 'Done')
       },
@@ -122,6 +128,9 @@ window.__ModuleLoader__.load({
       summary: function () {
         return T('整理交付说明', 'Writing delivery note')
       },
+      pausing: function () {
+        return T('等待本轮结束后暂停', 'Pausing after this turn')
+      },
     }
 
     // ───────────────────────── store ─────────────────────────
@@ -139,9 +148,14 @@ window.__ModuleLoader__.load({
         tab: 'chat',
         selectedAgentId: null,
         missionDraft: '',
+        acceptanceDraft: '',
         planning: false,
         plan: null,
         planError: '',
+        history: [],
+        selectedRunId: null,
+        previousRoster: null,
+        workspaceInfo: null,
       },
       listeners: [],
     }
@@ -202,6 +216,9 @@ window.__ModuleLoader__.load({
             loading: false,
             ready: true,
             error: '',
+            history: Array.isArray(data.history) ? data.history : [],
+            selectedRunId: data.selectedRunId || null,
+            previousRoster: data.previousRoster || null,
           })
         })
         .catch(function (error) {
@@ -253,11 +270,15 @@ window.__ModuleLoader__.load({
         options && typeof options.autoPlan === 'boolean'
           ? options.autoPlan
           : Boolean(store.state.config && store.state.config.team && store.state.config.team.autoPlan)
+      var acceptance =
+        options && typeof options.acceptance === 'string'
+          ? options.acceptance.trim()
+          : (store.state.acceptanceDraft || '').trim()
       planSeq += 1
       patch({ notice: '', running: true, plan: null, planError: '' })
-      api('/start', { mission: text, autoPlan: autoPlan })
+      api('/start', { mission: text, autoPlan: autoPlan, acceptance: acceptance })
         .then(function () {
-          patch({ missionDraft: '' })
+          patch({ missionDraft: '', acceptanceDraft: '' })
           pollOnce()
         })
         .catch(function (error) {
@@ -275,7 +296,7 @@ window.__ModuleLoader__.load({
       }
       var seq = (planSeq += 1)
       patch({ planning: true, plan: null, planError: '' })
-      api('/plan', { mission: text })
+      api('/plan', { mission: text, acceptance: (store.state.acceptanceDraft || '').trim() })
         .then(function (data) {
           if (planSeq !== seq) return
           patch({
@@ -303,7 +324,7 @@ window.__ModuleLoader__.load({
       var plan = store.state.plan
       if (!plan) return
       var mission = (store.state.missionDraft || '').trim() || plan.mission
-      api('/config', plan.config)
+      api('/config', Object.assign({}, plan.config, { snapshot: true }))
         .then(function (data) {
           patch({ config: data.config, plan: null })
           if (andStart) startRun(mission, { autoPlan: false })
@@ -333,6 +354,111 @@ window.__ModuleLoader__.load({
       api('/stop', {})
         .then(function () {
           pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function pauseRun() {
+      api('/pause', {})
+        .then(function () {
+          notify(T('将在本轮结束后暂停', 'Will pause after this turn'), 'info')
+          pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function resumeRun(id) {
+      api('/resume', { id: id || null })
+        .then(function () {
+          patch({ tab: 'chat' })
+          pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function openHistory(id) {
+      api('/history/open', { id: id })
+        .then(function (data) {
+          patch({ run: data.run, selectedRunId: id, tab: 'chat' })
+          pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function closeHistory() {
+      api('/history/close', {})
+        .then(function () {
+          patch({ selectedRunId: null })
+          pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function deleteHistory(id) {
+      api('/history/delete', { id: id })
+        .then(function () {
+          pollOnce()
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function undoRoster() {
+      api('/roster/undo', {})
+        .then(function (data) {
+          patch({ config: data.config, previousRoster: null })
+          notify(T('已恢复上一套阵容', 'Previous roster restored'), 'success')
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function currentRunId() {
+      var run = store.state.run
+      return run && run.id ? run.id : ''
+    }
+
+    function downloadMarkdown(markdown, filename) {
+      if (typeof document === 'undefined' || typeof Blob === 'undefined') return
+      var blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+      var url = URL.createObjectURL(blob)
+      var link = document.createElement('a')
+      link.href = url
+      link.download = filename || 'agent-team-room.md'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setTimeout(function () {
+        URL.revokeObjectURL(url)
+      }, 1000)
+    }
+
+    function exportRun(id) {
+      api('/export?id=' + encodeURIComponent(id || currentRunId() || ''))
+        .then(function (data) {
+          downloadMarkdown(data.markdown, 'agent-team-room-' + (data.id || 'run') + '.md')
+        })
+        .catch(function (error) {
+          notify(String((error && error.message) || error), 'error')
+        })
+    }
+
+    function saveRun(id) {
+      api('/save', { id: id || currentRunId() || '' })
+        .then(function (data) {
+          notify(T('已保存到 ', 'Saved to ') + data.path, 'success')
         })
         .catch(function (error) {
           notify(String((error && error.message) || error), 'error')
@@ -519,6 +645,19 @@ window.__ModuleLoader__.load({
               },
               T('团队设置', 'Team settings'),
             ),
+            h(
+              'button',
+              {
+                type: 'button',
+                role: 'tab',
+                'aria-selected': state.tab === 'history',
+                className: state.tab === 'history' ? 'on' : '',
+                onClick: function () {
+                  patch({ tab: 'history' })
+                },
+              },
+              T('运行历史', 'History'),
+            ),
           ),
         ),
       )
@@ -662,13 +801,34 @@ window.__ModuleLoader__.load({
             },
           }),
           state.running
-            ? h(
-                'button',
-                { type: 'button', className: 'atr-btn atr-btn-danger', onClick: stopRun },
-                h(Icon, { name: 'stop' }),
-                T('停止协作', 'Stop'),
-              )
+            ? [
+                h(
+                  'button',
+                  { key: 'pause', type: 'button', className: 'atr-btn atr-btn-ghost', onClick: pauseRun },
+                  T('本轮后暂停', 'Pause'),
+                ),
+                h(
+                  'button',
+                  { key: 'stop', type: 'button', className: 'atr-btn atr-btn-danger', onClick: stopRun },
+                  h(Icon, { name: 'stop' }),
+                  T('停止协作', 'Stop'),
+                ),
+              ]
             : [
+                state.run && (state.run.status === 'paused' || state.run.status === 'stopped')
+                  ? h(
+                      'button',
+                      {
+                        key: 'resume',
+                        type: 'button',
+                        className: 'atr-btn atr-btn-primary',
+                        onClick: function () {
+                          resumeRun(state.run.id)
+                        },
+                      },
+                      T('继续上一场', 'Resume'),
+                    )
+                  : null,
                 h(
                   'button',
                   {
@@ -702,6 +862,27 @@ window.__ModuleLoader__.load({
                 ),
               ],
         ),
+        h(
+          'div',
+          { className: 'atr-mission-acceptance' },
+          h(
+            'span',
+            { className: 'atr-mission-acceptance-label' },
+            T('验收标准', 'Definition of done'),
+          ),
+          h('input', {
+            className: 'atr-input',
+            value: state.acceptanceDraft,
+            disabled: state.running,
+            placeholder: T(
+              '可选：逐条写明什么算完成，判定会按此验收',
+              'Optional: what counts as done; the judge checks these',
+            ),
+            onChange: function (event) {
+              patch({ acceptanceDraft: event.target.value })
+            },
+          }),
+        ),
         state.run && !state.running
           ? h(
               'div',
@@ -709,15 +890,28 @@ window.__ModuleLoader__.load({
               h(
                 'span',
                 null,
-                state.run.mission
-                  ? T('上一场：', 'Last run: ') + state.run.mission
-                  : '',
+                state.selectedRunId
+                  ? T('正在查看历史记录', 'Viewing a past run')
+                  : state.run.mission
+                    ? T('上一场：', 'Last run: ') + state.run.mission
+                    : '',
               ),
               h(
-                'button',
-                { type: 'button', className: 'atr-link', onClick: resetRun },
-                h(Icon, { name: 'trash' }),
-                T('清空记录', 'Clear'),
+                'div',
+                { className: 'atr-foot-actions' },
+                state.selectedRunId
+                  ? h(
+                      'button',
+                      { type: 'button', className: 'atr-link', onClick: closeHistory },
+                      T('返回最新', 'Back to latest'),
+                    )
+                  : null,
+                h(
+                  'button',
+                  { type: 'button', className: 'atr-link', onClick: resetRun },
+                  h(Icon, { name: 'trash' }),
+                  T('清空记录', 'Clear'),
+                ),
               ),
             )
           : null,
@@ -856,6 +1050,9 @@ window.__ModuleLoader__.load({
             { className: 'atr-msg-head' },
             h('span', { className: 'atr-msg-name' }, message.agentName),
             h('span', { className: 'atr-msg-role' }, message.role),
+            message.execution === 'agent'
+              ? h('span', { className: 'atr-badge' }, T('真实执行', 'Tools'))
+              : null,
             isSummary ? h('span', { className: 'atr-badge' }, T('总结', 'Summary')) : null,
             h('span', { className: 'atr-msg-time' }, formatTime(message.at)),
           ),
@@ -893,14 +1090,34 @@ window.__ModuleLoader__.load({
       var state = props.state
       var run = state.run
       var scroller = useRef(null)
+      var stickRef = useRef(true)
+      var bottomPair = useState(true)
+      var atBottom = bottomPair[0]
+      var setAtBottom = bottomPair[1]
       var messages = run && Array.isArray(run.messages) ? run.messages : []
       var last = messages.length ? messages[messages.length - 1] : null
       var lastSignal = last ? last.id + ':' + (last.text ? last.text.length : 0) : ''
 
+      function handleScroll() {
+        var element = scroller.current
+        if (!element) return
+        var near = element.scrollHeight - element.scrollTop - element.clientHeight < 64
+        stickRef.current = near
+        setAtBottom(near)
+      }
+
+      function jumpToLatest() {
+        var element = scroller.current
+        if (!element) return
+        stickRef.current = true
+        setAtBottom(true)
+        element.scrollTop = element.scrollHeight
+      }
+
       useEffect(
         function () {
           var element = scroller.current
-          if (!element) return
+          if (!element || !stickRef.current) return
           element.scrollTop = element.scrollHeight
         },
         [lastSignal, messages.length],
@@ -908,7 +1125,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { className: 'atr-chat', ref: scroller },
+        { className: 'atr-chat', ref: scroller, onScroll: handleScroll },
         messages.length === 0 ? h(EmptyState, null) : null,
         messages.map(function (message, index) {
           var previous = index > 0 ? messages[index - 1] : null
@@ -938,6 +1155,17 @@ window.__ModuleLoader__.load({
         }),
         run && run.status === 'error'
           ? h('div', { className: 'atr-run-error' }, T('协作中断：', 'Run failed: ') + (run.error || ''))
+          : null,
+        !atBottom && messages.length
+          ? h(
+              'div',
+              { className: 'atr-jump-wrap' },
+              h(
+                'button',
+                { type: 'button', className: 'atr-jump', onClick: jumpToLatest },
+                '↓ ' + T('回到最新', 'Jump to latest'),
+              ),
+            )
           : null,
       )
     }
@@ -1021,6 +1249,9 @@ window.__ModuleLoader__.load({
       })
       var elapsed =
         run && run.startedAt ? formatDuration((run.endedAt || Date.now()) - run.startedAt) : '—'
+      var tokenTotal =
+        run && run.tokens ? (run.tokens.input || 0) + (run.tokens.output || 0) : tokens
+      var resumable = Boolean(run && (run.status === 'paused' || run.status === 'stopped'))
 
       return h(
         'aside',
@@ -1112,6 +1343,22 @@ window.__ModuleLoader__.load({
                 : T('尚未开始', 'Not started'),
             ),
           ),
+          run && run.acceptance
+            ? h(
+                'div',
+                { className: 'atr-run-acceptance' },
+                h('b', null, T('验收标准', 'Definition of done')),
+                h('span', null, run.acceptance),
+              )
+            : null,
+          run && run.nextFocus
+            ? h(
+                'div',
+                { className: 'atr-run-acceptance' },
+                h('b', null, T('下一轮重点', 'Next focus')),
+                h('span', null, run.nextFocus),
+              )
+            : null,
           h(
             'div',
             { className: 'atr-kv' },
@@ -1165,9 +1412,67 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'atr-kv' },
             h('span', null, T('Token', 'Tokens')),
-            h('span', null, tokens ? String(tokens) : '—'),
+            h('span', null, tokenTotal ? String(tokenTotal) : '—'),
+          ),
+          h(
+            'div',
+            { className: 'atr-kv' },
+            h('span', null, T('模式', 'Mode')),
+            h(
+              'span',
+              null,
+              run && run.executionMode === 'agent'
+                ? T('真实执行', 'Agent + tools')
+                : T('对话', 'Chat'),
+            ),
           ),
         ),
+        run
+          ? h(
+              'section',
+              { className: 'atr-side-sec' },
+              h('div', { className: 'atr-sec-title' }, T('操作', 'Actions')),
+              h(
+                'div',
+                { className: 'atr-action-row' },
+                resumable
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'atr-btn atr-btn-primary atr-btn-block',
+                        onClick: function () {
+                          resumeRun(run.id)
+                        },
+                      },
+                      T('继续这一场', 'Resume this run'),
+                    )
+                  : null,
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'atr-btn atr-btn-ghost atr-btn-block',
+                    onClick: function () {
+                      exportRun(run.id)
+                    },
+                  },
+                  T('导出 Markdown', 'Export Markdown'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'atr-btn atr-btn-ghost atr-btn-block',
+                    onClick: function () {
+                      saveRun(run.id)
+                    },
+                  },
+                  T('保存到工作区', 'Save to workspace'),
+                ),
+              ),
+            )
+          : null,
         h(
           'section',
           { className: 'atr-side-sec' },
@@ -1251,6 +1556,37 @@ window.__ModuleLoader__.load({
       var providerOptions = (meta && Array.isArray(meta.providers) ? meta.providers : []).slice()
       var models = providerModels(meta, agent.provider)
       var colors = ['#3b82f6', '#0ea5e9', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#64748b']
+      var infoPair = useState(null)
+      var modelInfo = infoPair[0]
+      var setModelInfo = infoPair[1]
+      useEffect(
+        function () {
+          var cancelled = false
+          if (!agent.provider || !agent.model) {
+            setModelInfo(null)
+            return function () {}
+          }
+          api(
+            '/model-info?provider=' +
+              encodeURIComponent(agent.provider) +
+              '&model=' +
+              encodeURIComponent(agent.model),
+          )
+            .then(function (data) {
+              if (!cancelled) setModelInfo(data)
+            })
+            .catch(function () {
+              if (!cancelled) setModelInfo(null)
+            })
+          return function () {
+            cancelled = true
+          }
+        },
+        [agent.provider, agent.model],
+      )
+      var efforts = modelInfo && modelInfo.reasoning && Array.isArray(modelInfo.reasoning.efforts)
+        ? modelInfo.reasoning.efforts
+        : []
 
       return h(
         'div',
@@ -1267,6 +1603,34 @@ window.__ModuleLoader__.load({
               onField(index, 'name', event.target.value)
             },
           }),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'atr-icon-btn',
+              disabled: index === 0,
+              title: T('上移', 'Move up'),
+              'aria-label': T('上移', 'Move up'),
+              onClick: function () {
+                props.onMove(index, -1)
+              },
+            },
+            '↑',
+          ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'atr-icon-btn',
+              disabled: index >= draft.agents.length - 1,
+              title: T('下移', 'Move down'),
+              'aria-label': T('下移', 'Move down'),
+              onClick: function () {
+                props.onMove(index, 1)
+              },
+            },
+            '↓',
+          ),
           h(
             'label',
             { className: 'atr-switch', title: T('启用该成员', 'Enable this member') },
@@ -1338,6 +1702,55 @@ window.__ModuleLoader__.load({
                 onField(index, 'temperature', Number(event.target.value))
               },
             }),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'atr-ac-grid' },
+          h(
+            'label',
+            { className: 'atr-label' },
+            T('最大输出 Token', 'Max output tokens'),
+            h('input', {
+              type: 'number',
+              className: 'atr-input',
+              min: 0,
+              max: 64000,
+              step: 256,
+              value: agent.maxTokens || 0,
+              placeholder: T('0 = 模型默认', '0 = model default'),
+              onChange: function (event) {
+                onField(index, 'maxTokens', Number(event.target.value) || 0)
+              },
+            }),
+          ),
+          h(
+            'label',
+            { className: 'atr-label' },
+            T('推理强度', 'Reasoning effort'),
+            efforts.length
+              ? h(
+                  'select',
+                  {
+                    className: 'atr-select',
+                    value: agent.reasoningEffort || '',
+                    onChange: function (event) {
+                      onField(index, 'reasoningEffort', event.target.value)
+                    },
+                  },
+                  h('option', { value: '' }, T('模型默认', 'Model default')),
+                  efforts.map(function (effort) {
+                    return h('option', { key: effort.id, value: effort.id }, effort.name || effort.id)
+                  }),
+                )
+              : h('input', {
+                  className: 'atr-input',
+                  value: agent.reasoningEffort || '',
+                  placeholder: T('留空 = 默认', 'empty = default'),
+                  onChange: function (event) {
+                    onField(index, 'reasoningEffort', event.target.value)
+                  },
+                }),
           ),
         ),
         h(
@@ -1516,9 +1929,49 @@ window.__ModuleLoader__.load({
           }
         })
       }
+      function moveAgent(index, delta) {
+        var target = index + delta
+        if (target < 0 || target >= draft.agents.length) return
+        modify(function (previous) {
+          var agents = previous.agents.slice()
+          var moved = agents.splice(index, 1)[0]
+          agents.splice(target, 0, moved)
+          return { agents: agents }
+        })
+      }
+      function pickWorkspace() {
+        try {
+          var ui = ctxRef && ctxRef.get ? ctxRef.get('uiWorkspace') : null
+          if (!ui || !ui.pickDirectory) {
+            notify(T('当前环境不支持目录选择，请手动填写路径', 'Directory picker unavailable'), 'warn')
+            return
+          }
+          ui.pickDirectory()
+            .then(function (dir) {
+              if (dir) modify({ team: Object.assign({}, draft.team, { workspace: dir }) })
+            })
+            .catch(function () {})
+        } catch (error) {
+          notify(String((error && error.message) || error), 'error')
+        }
+      }
+      function restoreRoster() {
+        api('/roster/undo', {})
+          .then(function (data) {
+            setDraft(clone(data.config))
+            patch({ config: data.config, previousRoster: null })
+            notify(T('已恢复上一套阵容', 'Previous roster restored'), 'success')
+            pollOnce()
+          })
+          .catch(function (error) {
+            notify(String((error && error.message) || error), 'error')
+          })
+      }
 
       var dirty = JSON.stringify(draft) !== JSON.stringify(state.config)
       var defaultRole = meta && meta.providers && meta.providers.length === 0
+      var providerOptions = meta && Array.isArray(meta.providers) ? meta.providers : []
+      var leadModels = providerModels(meta, draft.team.leadProvider)
 
       return h(
         'div',
@@ -1574,6 +2027,120 @@ window.__ModuleLoader__.load({
                 }),
               ),
             ),
+            h(
+              'label',
+              { className: 'atr-label' },
+              T('主 Agent 服务', 'Lead provider'),
+              h(
+                'select',
+                {
+                  className: 'atr-select',
+                  value: draft.team.leadProvider || '',
+                  onChange: function (event) {
+                    var providerId = event.target.value
+                    var next = providerModels(meta, providerId)
+                    modify({
+                      team: Object.assign({}, draft.team, {
+                        leadProvider: providerId,
+                        leadModel: next.length ? next[0].id : '',
+                      }),
+                    })
+                  },
+                },
+                h('option', { value: '' }, T('跟随默认模型', 'Use default')),
+                providerOptions.map(function (provider) {
+                  return h('option', { key: provider.id, value: provider.id }, provider.name)
+                }),
+              ),
+            ),
+            h(
+              'label',
+              { className: 'atr-label' },
+              T('主 Agent 模型', 'Lead model'),
+              leadModels.length
+                ? h(
+                    'select',
+                    {
+                      className: 'atr-select',
+                      value: draft.team.leadModel || '',
+                      onChange: function (event) {
+                        modify({
+                          team: Object.assign({}, draft.team, { leadModel: event.target.value }),
+                        })
+                      },
+                    },
+                    leadModels.map(function (model) {
+                      return h('option', { key: model.id, value: model.id }, model.name)
+                    }),
+                  )
+                : h('input', {
+                    className: 'atr-input',
+                    value: draft.team.leadModel || '',
+                    disabled: !draft.team.leadProvider,
+                    placeholder: T('跟随默认', 'Default'),
+                    onChange: function (event) {
+                      modify({
+                        team: Object.assign({}, draft.team, { leadModel: event.target.value }),
+                      })
+                    },
+                  }),
+            ),
+            h(
+              'label',
+              { className: 'atr-label' },
+              T('编排模式', 'Orchestration'),
+              h(
+                'select',
+                {
+                  className: 'atr-select',
+                  value: draft.team.orchestration || 'round-robin',
+                  onChange: function (event) {
+                    modify({
+                      team: Object.assign({}, draft.team, { orchestration: event.target.value }),
+                    })
+                  },
+                },
+                h('option', { value: 'round-robin' }, T('按顺序轮询', 'Round robin')),
+                h('option', { value: 'lead-picks' }, T('主 Agent 点名', 'Lead picks speakers')),
+                h('option', { value: 'parallel' }, T('同轮并行', 'Parallel round')),
+              ),
+            ),
+            h(
+              'label',
+              { className: 'atr-label' },
+              T('单次调用超时（秒）', 'Call timeout (s)'),
+              h('input', {
+                type: 'number',
+                className: 'atr-input',
+                min: 30,
+                max: 900,
+                value: draft.team.callTimeoutSec || 180,
+                onChange: function (event) {
+                  modify({
+                    team: Object.assign({}, draft.team, {
+                      callTimeoutSec: Number(event.target.value) || 180,
+                    }),
+                  })
+                },
+              }),
+            ),
+            h(
+              'label',
+              { className: 'atr-label' },
+              T('成员工作模式', 'Member mode'),
+              h(
+                'select',
+                {
+                  className: 'atr-select',
+                  value: draft.team.mode || 'chat',
+                  onChange: function (event) {
+                    modify({ team: Object.assign({}, draft.team, { mode: event.target.value }) })
+                  },
+                },
+                h('option', { value: 'chat' }, T('对话模式', 'Chat')),
+                h('option', { value: 'agent' }, T('真实执行（工具/子会话）', 'Agent + tools')),
+              ),
+            ),
           ),
           h(
             'div',
@@ -1606,6 +2173,74 @@ window.__ModuleLoader__.load({
               h('i', null),
             ),
           ),
+          h(
+            'div',
+            { className: 'atr-set-toggle' },
+            h(
+              'div',
+              { className: 'atr-set-toggle-text' },
+              h('b', null, T('工作区上下文', 'Workspace context')),
+              h(
+                'span',
+                null,
+                T(
+                  '读取该目录的结构与关键文件（AGENTS.md/README/package.json 等），作为团队上下文；交付记录也可保存到这里。真实执行模式会在该目录内使用工具。',
+                  'Reads this directory’s layout and key files as team context; delivery notes can be saved here, and agent mode runs tools inside it.',
+                ),
+              ),
+            ),
+            h(
+              'div',
+              { className: 'atr-workspace-row' },
+              h('input', {
+                className: 'atr-input',
+                value: draft.team.workspace || '',
+                placeholder: T('例如 C:\\projects\\my-app', 'e.g. C:\\projects\\my-app'),
+                onChange: function (event) {
+                  modify({ team: Object.assign({}, draft.team, { workspace: event.target.value }) })
+                },
+              }),
+              h(
+                'button',
+                { type: 'button', className: 'atr-btn atr-btn-ghost', onClick: pickWorkspace },
+                T('浏览', 'Browse'),
+              ),
+            ),
+          ),
+          state.previousRoster
+            ? h(
+                'div',
+                { className: 'atr-set-toggle' },
+                h(
+                  'div',
+                  { className: 'atr-set-toggle-text' },
+                  h('b', null, T('恢复上一套阵容', 'Restore previous roster')),
+                  h(
+                    'span',
+                    null,
+                    T(
+                      '自动组队或采用方案前的团队配置已保存，可一键恢复。',
+                      'The roster from before the last auto-plan/apply is saved here.',
+                    ),
+                  ),
+                ),
+                h(
+                  'button',
+                  { type: 'button', className: 'atr-btn atr-btn-ghost', onClick: restoreRoster },
+                  T('恢复', 'Restore'),
+                ),
+              )
+            : null,
+          draft.team.mode === 'agent'
+            ? h(
+                'div',
+                { className: 'atr-set-note' },
+                T(
+                  '真实执行模式会为每个成员创建带工具的子会话，可能触发工具审批，并允许读写所选工作区；仅在需要实际改文件/跑命令时开启。',
+                  'Agent mode creates tool-enabled subagent turns and may trigger tool approvals; it can read/write the selected workspace. Enable only when agents must act.',
+                ),
+              )
+            : null,
         ),
         h(
           'div',
@@ -1617,6 +2252,7 @@ window.__ModuleLoader__.load({
               index: index,
               meta: meta,
               onField: onField,
+              onMove: moveAgent,
               onRemove: removeAgent,
             })
           }),
@@ -1803,6 +2439,121 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ───────────────────────── history view ─────────────────────────
+    function HistoryView(props) {
+      var state = props.state
+      var history = Array.isArray(state.history) ? state.history : []
+      return h(
+        'div',
+        { className: 'atr-settings' },
+        h('div', { className: 'atr-history-title' }, T('运行历史', 'Run history')),
+        h(
+          'p',
+          { className: 'atr-history-sub' },
+          T(
+            '最近 ' + history.length + ' 场协作；可以打开查看、继续未完成的场次、导出或删除。',
+            'The last ' + history.length + ' runs; open, resume unfinished ones, export or delete.',
+          ),
+        ),
+        history.length
+          ? history.map(function (item) {
+              var tokenTotal = item.tokens ? (item.tokens.input || 0) + (item.tokens.output || 0) : 0
+              var resumable = item.status === 'paused' || item.status === 'stopped'
+              return h(
+                'div',
+                {
+                  key: item.id,
+                  className:
+                    'atr-history-row' + (state.selectedRunId === item.id ? ' on' : ''),
+                },
+                h(
+                  'div',
+                  { className: 'atr-history-main' },
+                  h(
+                    'div',
+                    { className: 'atr-history-mission' },
+                    item.mission || T('（无任务）', '(no mission)'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'atr-history-meta' },
+                    (STATUS_TEXT[item.delivered ? 'delivered' : item.status] || STATUS_TEXT.idle)(),
+                    ' · ',
+                    T('第 ', 'Round ') + (item.currentRound || 0) + T(' 轮', ''),
+                    ' · ',
+                    formatTime(item.startedAt),
+                    tokenTotal ? ' · ' + tokenTotal + ' tokens' : '',
+                    item.id === state.run?.id && !state.selectedRunId
+                      ? ' · ' + T('当前', 'current')
+                      : '',
+                  ),
+                  item.acceptance
+                    ? h('div', { className: 'atr-history-acceptance' }, T('验收：', 'DoD: ') + item.acceptance)
+                    : null,
+                ),
+                h(
+                  'div',
+                  { className: 'atr-history-actions' },
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'atr-btn atr-btn-ghost',
+                      disabled: state.running,
+                      onClick: function () {
+                        openHistory(item.id)
+                      },
+                    },
+                    T('打开', 'Open'),
+                  ),
+                  resumable
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'atr-btn atr-btn-primary',
+                          disabled: state.running,
+                          onClick: function () {
+                            resumeRun(item.id)
+                          },
+                        },
+                        T('继续', 'Resume'),
+                      )
+                    : null,
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'atr-btn atr-btn-ghost',
+                      onClick: function () {
+                        exportRun(item.id)
+                      },
+                    },
+                    T('导出', 'Export'),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'atr-btn atr-btn-ghost',
+                      disabled: state.running,
+                      onClick: function () {
+                        deleteHistory(item.id)
+                      },
+                    },
+                    T('删除', 'Delete'),
+                  ),
+                ),
+              )
+            })
+          : h(
+              'div',
+              { className: 'atr-history-empty' },
+              T('还没有运行记录。开始一场协作后会出现在这里。', 'No runs yet. Start a collaboration to see it here.'),
+            ),
+      )
+    }
+
     // ───────────────────────── page shell ─────────────────────────
     class Boundary extends React.Component {
       constructor(props) {
@@ -1884,7 +2635,9 @@ window.__ModuleLoader__.load({
         content =
           state.tab === 'settings'
             ? h(SettingsView, { state: state })
-            : h(ChatView, { state: state })
+            : state.tab === 'history'
+              ? h(HistoryView, { state: state })
+              : h(ChatView, { state: state })
       }
 
       return h(
@@ -2090,6 +2843,33 @@ window.__ModuleLoader__.load({
       '.atr-verdict.is-delivered .atr-verdict-state{color:var(--dsw-alias-state-success-primary)}',
       '.atr-pill-delivered{color:var(--dsw-alias-state-success-primary)}',
       '.atr-pill-delivered .atr-pill-dot{background:var(--dsw-alias-state-success-primary)}',
+      '.atr-pill-paused{color:var(--dsw-alias-state-warn-primary)}',
+      '.atr-pill-paused .atr-pill-dot{background:var(--dsw-alias-state-warn-primary)}',
+      '.atr-pill-pausing{color:var(--dsw-alias-state-warn-primary)}',
+      '.atr-pill-pausing .atr-pill-dot{background:var(--dsw-alias-state-warn-primary);animation:atr-pulse 1.4s ease-in-out infinite}',
+      '.atr-mission-acceptance{display:flex;align-items:center;gap:8px;margin-top:8px}',
+      '.atr-mission-acceptance-label{font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+      '.atr-mission-acceptance .atr-input{font-size:12px}',
+      '.atr-foot-actions{display:flex;align-items:center;gap:12px}',
+      '.atr-jump-wrap{position:sticky;bottom:10px;display:flex;justify-content:flex-end;padding:0 20px;pointer-events:none;z-index:2}',
+      '.atr-jump{pointer-events:auto;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border-radius:999px;padding:5px 11px;font:inherit;font-size:11px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.18)}',
+      '.atr-run-acceptance{margin:8px 0;padding:8px 9px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);display:flex;flex-direction:column;gap:3px;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary)}',
+      '.atr-run-acceptance b{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary)}',
+      '.atr-run-acceptance span{color:var(--dsw-alias-label-primary);white-space:pre-wrap;max-height:110px;overflow:auto}',
+      '.atr-action-row{display:flex;flex-direction:column;gap:8px}',
+      '.atr-workspace-row{display:flex;gap:8px;align-items:center;min-width:min(420px,100%)}',
+      '.atr-workspace-row .atr-input{flex:1}',
+      '.atr-history-title{font-size:14px;font-weight:600;margin:2px 0 4px}',
+      '.atr-history-sub{margin:0 0 14px;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6}',
+      '.atr-history-row{display:flex;gap:14px;align-items:center;justify-content:space-between;padding:12px 14px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);margin-bottom:10px}',
+      '.atr-history-row.on{border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,var(--dsw-alias-bg-layer-1))}',
+      '.atr-history-main{min-width:0;display:flex;flex-direction:column;gap:4px}',
+      '.atr-history-mission{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:min(560px,56vw)}',
+      '.atr-history-meta{font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+      '.atr-history-acceptance{font-size:11px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:min(560px,56vw)}',
+      '.atr-history-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}',
+      '.atr-history-empty{padding:30px 6px;font-size:12.5px;color:var(--dsw-alias-label-secondary);text-align:center}',
+      '.atr-set-note{margin-top:10px;padding:8px 10px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 8%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary) 30%,var(--dsw-alias-border-l1));font-size:11px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
       '.atr-set-toggle{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:12px;padding-top:11px;border-top:1px solid var(--dsw-alias-border-l1)}',
       '.atr-set-toggle-text{display:flex;flex-direction:column;gap:3px;min-width:0}',
       '.atr-set-toggle-text b{font-size:12px;font-weight:600}',
