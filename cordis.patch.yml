@@ -1,0 +1,6 @@
+# Bundle patch: one Host row plus this package's `dsh.client` half. The Host
+# row serves /api/agent-room/* and runs the collaboration loop; the browser
+# half registers the sidebar panel entry and its main panel page.
+- insert:
+    - id: agent-team-room
+      name: '@local/agent-team-room'

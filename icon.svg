@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Agent Team Room">
+  <defs>
+    <linearGradient id="atr-bg" x1="8" y1="4" x2="58" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="0.55" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="atr-glow" x1="14" y1="12" x2="50" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#atr-bg)"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#atr-glow)"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.92">
+    <path d="M32 21.5 20.5 43M32 21.5 43.5 43M22.5 45.5h19"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="32" cy="20" r="6.2"/>
+    <circle cx="19.4" cy="44.2" r="5.4" opacity="0.92"/>
+    <circle cx="44.6" cy="44.2" r="5.4" opacity="0.92"/>
+  </g>
+  <g fill="#0b2b5c" opacity="0.55">
+    <circle cx="32" cy="20" r="2.1"/>
+    <circle cx="19.4" cy="44.2" r="1.8"/>
+    <circle cx="44.6" cy="44.2" r="1.8"/>
+  </g>
+</svg>

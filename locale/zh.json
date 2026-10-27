@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "智能体团队",
+    "description": "多 Agent 协作工作室：可人工配置 Agent，也可由主 Agent 按任务难度自动组队；协作持续到主 Agent 判定交付或用户停止，实时展示 Agent 之间的对话、插话与交付说明。"
+  }
+}
